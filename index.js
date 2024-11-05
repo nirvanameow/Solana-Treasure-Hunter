@@ -98,7 +98,7 @@ if (isMainThread) {
     await checkInitialization();
     loadProgress();
 
-    const numWorkers = 5;
+    const numWorkers = 1;
     for (let i = 0; i < numWorkers; i++) {
       const worker = new Worker(__filename, {
         workerData: {
