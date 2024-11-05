@@ -8,7 +8,7 @@ const chalk = require('chalk');
 const BASE_PATH = '/sol-treasure-data';
 
 if (isMainThread) {
-  global.seeds = fs.readFileSync(`${BASE_PATH}/seed-key-words.txt`, 'utf8').split('\n');
+  global.seeds = fs.readFileSync(__dirname + '/seed-key-words.txt', 'utf8').split('\n');
   const triedFile = `${BASE_PATH}/logs.json`;
   let triedSet = new Set();
   let triedWallets = {};
