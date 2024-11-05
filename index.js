@@ -72,29 +72,21 @@ if (isMainThread) {
 
   setInterval(flushBatch, flushInterval);
 
-  function logInfo(message) {
-    console.log(chalk.blue(`[INFO - ${new Date().toISOString()}] ${message}`));
-  }
-
-  function logError(message) {
-    console.error(chalk.red(`[ERROR - ${new Date().toISOString()}] ${message}`));
-  }
-
-  function logSuccess(message) {
-    console.log(chalk.green(`[SUCCESS - ${new Date().toISOString()}] ${message}`));
-  }
-
   async function checkInitialization() {
-    logInfo('Checking connection to Solana network...');
-    try {
-      const connection = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed');
-      const version = await connection.getVersion();
-      logSuccess(`Connection successfully established. Version: ${version['solana-core']}`);
-    } catch (error) {
-      logError('Error establishing connection to Solana network: ' + error.message);
-      process.exit(1);
+    let retries = 5;
+    while (retries > 0) {
+      try {
+        const connection = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed');
+        await connection.getVersion();
+        console.log(`Connection successfully established. Version: ${connection._rpcEndpoint}`);
+        return;
+      } catch (error) {
+        console.error(`Error establishing connection to Solana network: ${error.message}. Retrying...`);
+        retries--;
+        await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retrying
+      }
     }
-    logInfo('Initialization successful. Starting main process...');
+    throw new Error('Failed to connect to Solana network after several attempts.');
   }
 
   (async () => {
@@ -120,25 +112,20 @@ if (isMainThread) {
           const { pubkey, seedPhrase, balance } = message;
           const query = `INSERT INTO found_wallets (pubkey, seed, balance) VALUES (?, ?, ?)`;
           db.query(query, [pubkey, seedPhrase, balance], (err, result) => {
-            if (err) logError(`Error saving found wallet to database: ${err.message}`);
-            else logSuccess(`Found wallet saved: pubkey: ${pubkey}, balance: ${balance}`);
+            if (err) console.error(`Error saving found wallet to database: ${err.message}`);
+            else console.log(`Found wallet saved: pubkey: ${pubkey}, balance: ${balance}`);
           });
         }
       });
-      worker.on('error', (error) => {
-        logError(`Worker ${i + 1} error: ${error.message}`);
+      worker.on('error', error => {
+        console.error(`Worker ${i + 1} error: ${error.message}`);
       });
-      worker.on('exit', (code) => {
-        if (code !== 0) {
-          logError(`Worker ${i + 1} stopped with exit code ${code}`);
-        }
+      worker.on('exit', code => {
+        if (code !== 0) console.error(`Worker ${i + 1} stopped with exit code ${code}`);
       });
     }
   })();
 } else {
-  const { Keypair, Connection, clusterApiUrl } = require('@solana/web3.js');
-  const { derivePath } = require('ed25519-hd-key');
-  const bip39 = require('bip39');
   const seeds = workerData.seeds;
   const workerId = workerData.workerId;
 
@@ -161,24 +148,18 @@ if (isMainThread) {
         const seed = await bip39.mnemonicToSeed(seedPhrase);
         const derivedSeed = derivePath(`m/44'/501'/0'/0'`, seed.toString('hex')).key;
         const keypair = Keypair.fromSeed(derivedSeed);
-
         const connection = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed');
-
         const pubkey = keypair.publicKey.toBase58();
-        console.log(chalk.yellow(`[Worker ${workerId} - INFO] Testing seed: ${seedPhrase} for pubkey: ${pubkey}`));
         const balance = await connection.getBalance(keypair.publicKey);
-        console.log(chalk.yellow(`[Worker ${workerId} - INFO] Retrieved balance for wallet ${pubkey}: ${balance}`));
         if (balance > 0) {
-          console.log(chalk.green(`[Worker ${workerId} - SUCCESS] Found SOL in wallet: ${pubkey} with balance: ${balance}`));
           parentPort.postMessage({ type: 'saveFoundWallet', pubkey, seedPhrase, balance });
         } else {
-          console.log(chalk.yellow(`[Worker ${workerId} - INFO] No SOL found in wallet: ${pubkey}`));
+          parentPort.postMessage({ type: 'saveTriedSet', seedPhrase, pubkey, balance });
         }
-        parentPort.postMessage({ type: 'saveTriedSet', seedPhrase, pubkey, balance });
         break;
       } catch (error) {
         console.error(chalk.red(`[Worker ${workerId} - ERROR] Error checking seed: ${seedPhrase} -> ${error.message}`));
-        await delay(5000 + Math.floor(Math.random() * 5000));
+        await delay(5000);
       }
     }
   }
