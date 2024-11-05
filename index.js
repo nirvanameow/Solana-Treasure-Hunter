@@ -83,7 +83,7 @@ if (isMainThread) {
   (async () => {
     await checkInitialization();
 
-    const numWorkers = 5;
+    const numWorkers = 3;
     for (let i = 0; i < numWorkers; i++) {
       const worker = new Worker(__filename, {
         workerData: {
