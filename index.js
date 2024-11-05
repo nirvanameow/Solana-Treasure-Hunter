@@ -6,10 +6,12 @@ const { Worker, isMainThread, parentPort, workerData } = require('worker_threads
 const chalk = require('chalk');
 
 const BASE_PATH = '/sol-treasure-data';
+const SEED_FILE = `${__dirname}/seed-key-words.txt`;
+const TRIED_FILE = `${BASE_PATH}/logs.json`;
+const FOUND_FILE = `${BASE_PATH}/found.json`;
 
 if (isMainThread) {
-  global.seeds = fs.readFileSync(__dirname + '/seed-key-words.txt', 'utf8').split('\n');
-  const triedFile = `${BASE_PATH}/logs.json`;
+  global.seeds = fs.readFileSync(SEED_FILE, 'utf8').split('\n');
   let triedSet = new Set();
   let triedWallets = {};
   let walletCounter = 0;
@@ -28,8 +30,8 @@ if (isMainThread) {
   }
 
   function loadProgress() {
-    if (fs.existsSync(triedFile) && fs.readFileSync(triedFile, 'utf8').trim() !== '') {
-      const data = JSON.parse(fs.readFileSync(triedFile, 'utf8'));
+    if (fs.existsSync(TRIED_FILE) && fs.readFileSync(TRIED_FILE, 'utf8').trim() !== '') {
+      const data = JSON.parse(fs.readFileSync(TRIED_FILE, 'utf8'));
       triedWallets = data.triedWallets || {};
       triedSet = new Set(Object.keys(triedWallets));
       walletCounter = data.walletCounter || 0;
@@ -43,19 +45,18 @@ if (isMainThread) {
     walletCounter++;
     triedWallets[walletCounter] = { seedPhrase, pubkey, balance, timestamp: new Date().toISOString() };
     const dataToSave = { triedWallets, walletCounter, lastUpdated: new Date().toISOString() };
-    fs.writeFileSync(triedFile, JSON.stringify(dataToSave, null, 2));
+    fs.writeFileSync(TRIED_FILE, JSON.stringify(dataToSave, null, 2));
     logInfo(`Tried set saved for wallet #${walletCounter}: pubkey: ${pubkey}, balance: ${balance}`);
   }
 
   function saveFoundWallet(pubkey, seed, balance) {
-    const foundFile = `${BASE_PATH}/found.json`;
     const foundData = { pubkey, seed, balance };
     let foundWallets = [];
-    if (fs.existsSync(foundFile) && fs.readFileSync(foundFile, 'utf8').trim() !== '') {
-      foundWallets = JSON.parse(fs.readFileSync(foundFile, 'utf8'));
+    if (fs.existsSync(FOUND_FILE) && fs.readFileSync(FOUND_FILE, 'utf8').trim() !== '') {
+      foundWallets = JSON.parse(fs.readFileSync(FOUND_FILE, 'utf8'));
     }
     foundWallets.push(foundData);
-    fs.writeFileSync(foundFile, JSON.stringify(foundWallets, null, 2));
+    fs.writeFileSync(FOUND_FILE, JSON.stringify(foundWallets, null, 2));
     console.log(chalk.bgYellow.black(`Wallet with balance found! Public Key: ${pubkey}, Balance: ${balance}. Script will now terminate.`));
   }
 
@@ -70,7 +71,7 @@ if (isMainThread) {
     await checkInitialization();
     loadProgress();
 
-    const numWorkers = 3;
+    const numWorkers = 3; // Ajuste o número de workers aqui conforme necessário
     for (let i = 0; i < numWorkers; i++) {
       const worker = new Worker(__filename, { workerData: { seeds: global.seeds, triedSet: Array.from(triedSet), walletCounter, workerId: i + 1 } });
       workers.push(worker);
