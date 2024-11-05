@@ -92,7 +92,7 @@ if (isMainThread) {
   (async () => {
     await checkInitialization();
 
-    const numWorkers = 3;
+    const numWorkers = 1;
     for (let i = 0; i < numWorkers; i++) {
       const worker = new Worker(__filename, {
         workerData: {
