@@ -70,7 +70,7 @@ if (isMainThread) {
     await checkInitialization();
     loadProgress();
 
-    const numWorkers = 1;
+    const numWorkers = 3;
     for (let i = 0; i < numWorkers; i++) {
       const worker = new Worker(__filename, { workerData: { seeds: global.seeds, triedSet: Array.from(triedSet), walletCounter, workerId: i + 1 } });
       workers.push(worker);
