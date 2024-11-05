@@ -6,7 +6,6 @@ const { Worker, isMainThread, parentPort, workerData } = require('worker_threads
 const chalk = require('chalk');
 const mysql = require('mysql');
 
-// Setup database connection using environment variables
 const db = mysql.createConnection({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
@@ -23,7 +22,6 @@ db.connect(err => {
   ensureTables();
 });
 
-// Ensure database tables exist
 function ensureTables() {
   const sqlTriedWallets = `CREATE TABLE IF NOT EXISTS tried_wallets (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -54,6 +52,25 @@ function ensureTables() {
 
 if (isMainThread) {
   global.seeds = fs.readFileSync('seed-key-words.txt', 'utf8').split('\n');
+  let batchData = [];
+  const batchSize = 100;
+  const flushInterval = 10 * 60 * 1000;
+
+  function flushBatch() {
+    if (batchData.length === 0) return;
+    const query = `INSERT INTO tried_wallets (seedPhrase, pubkey, balance) VALUES ?`;
+    const values = batchData.map(item => [item.seedPhrase, item.pubkey, item.balance]);
+    db.query(query, [values], (err, result) => {
+      if (err) {
+        console.error(`Error saving batch to database: ${err.message}`);
+      } else {
+        console.log(`Batch of ${batchData.length} records saved successfully.`);
+      }
+    });
+    batchData = [];
+  }
+
+  setInterval(flushBatch, flushInterval);
 
   function logInfo(message) {
     console.log(chalk.blue(`[INFO - ${new Date().toISOString()}] ${message}`));
@@ -94,11 +111,11 @@ if (isMainThread) {
       worker.on('message', (message) => {
         if (message.type === 'saveTriedSet') {
           const { seedPhrase, pubkey, balance } = message;
-          const query = `INSERT INTO tried_wallets (seedPhrase, pubkey, balance) VALUES (?, ?, ?)`;
-          db.query(query, [seedPhrase, pubkey, balance], (err, result) => {
-            if (err) logError(`Error saving to database: ${err.message}`);
-            else logInfo(`Tried wallet saved: pubkey: ${pubkey}, balance: ${balance}`);
-          });
+          batchData.push({ seedPhrase, pubkey, balance });
+          console.log(`Accumulated data: ${batchData.length} records in batch`);
+          if (batchData.length >= batchSize) {
+            flushBatch();
+          }
         } else if (message.type === 'saveFoundWallet') {
           const { pubkey, seedPhrase, balance } = message;
           const query = `INSERT INTO found_wallets (pubkey, seed, balance) VALUES (?, ?, ?)`;
