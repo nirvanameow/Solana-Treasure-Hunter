@@ -84,7 +84,12 @@ if (isMainThread) {
   async function checkInitialization() {
     logInfo('Checking connection to Solana network...');
     try {
-      const connection = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed');
+      const connection = new Connection(clusterApiUrl('mainnet-beta'), {
+        commitment: 'confirmed',
+        fetchOpts: {
+          timeout: 120000 // Timeout de 120 segundos (2 minutos)
+        }
+      });
       const version = await connection.getVersion();
       logSuccess(`Connection successfully established. Version: ${version['solana-core']}`);
     } catch (error) {
