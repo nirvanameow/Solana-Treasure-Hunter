@@ -73,21 +73,23 @@ if (isMainThread) {
   setInterval(flushBatch, flushInterval);
 
   async function checkInitialization() {
-    let retries = 5;
-    while (retries > 0) {
-      try {
-        const connection = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed');
-        await connection.getVersion();
-        console.log(`Connection successfully established. Version: ${connection._rpcEndpoint}`);
-        return;
-      } catch (error) {
-        console.error(`Error establishing connection to Solana network: ${error.message}. Retrying...`);
-        retries--;
-        await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retrying
-      }
+    let attempt = 0;
+    const maxAttempts = 5;
+    while (attempt < maxAttempts) {
+        try {
+            const connection = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed');
+            await connection.getVersion();
+            console.log('Connection to Solana network successfully established.');
+            return connection;  // Retorna a conexão bem-sucedida
+        } catch (error) {
+            attempt++;
+            console.error(`Attempt ${attempt}: Error connecting to Solana network. Retrying in ${attempt * 5} seconds...`, error.message);
+            await new Promise(resolve => setTimeout(resolve, attempt * 5000));  // Espera incremental
+        }
     }
     throw new Error('Failed to connect to Solana network after several attempts.');
-  }
+}
+
 
   (async () => {
     await checkInitialization();
