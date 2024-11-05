@@ -13,6 +13,7 @@ if (isMainThread) {
   let triedSet = new Set();
   let triedWallets = {};
   let walletCounter = 0;
+  const workers = [];
 
   function logInfo(message) {
     console.log(chalk.blue(`[INFO - ${new Date().toISOString()}] ${message}`));
@@ -55,20 +56,7 @@ if (isMainThread) {
     }
     foundWallets.push(foundData);
     fs.writeFileSync(foundFile, JSON.stringify(foundWallets, null, 2));
-    logSuccess(`Found wallet added: ${pubkey}, balance: ${balance}`);
-  }
-
-  function delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  function getRandomSeedPhrase(seeds, length) {
-    const selectedIndices = new Set();
-    while (selectedIndices.size < length) {
-      const randomIndex = Math.floor(Math.random() * seeds.length);
-      selectedIndices.add(randomIndex);
-    }
-    return Array.from(selectedIndices).map(index => seeds[index]).join(' ');
+    console.log(chalk.bgYellow.black(`Wallet with balance found! Public Key: ${pubkey}, Balance: ${balance}. Script will now terminate.`));
   }
 
   async function checkInitialization() {
@@ -85,18 +73,21 @@ if (isMainThread) {
     const numWorkers = 1;
     for (let i = 0; i < numWorkers; i++) {
       const worker = new Worker(__filename, { workerData: { seeds: global.seeds, triedSet: Array.from(triedSet), walletCounter, workerId: i + 1 } });
+      workers.push(worker);
+
       worker.on('message', (message) => {
         if (message.type === 'saveTriedSet') {
           saveTriedSet(message.seedPhrase, message.pubkey, message.balance);
         } else if (message.type === 'saveFoundWallet') {
           saveFoundWallet(message.pubkey, message.seedPhrase, message.balance);
+          workers.forEach(w => w.terminate());
+          process.exit(0);
         }
       });
+
       worker.on('error', logError);
       worker.on('exit', (code) => {
-        if (code !== 0) {
-          logError(`Worker ${i + 1} stopped with exit code ${code}`);
-        }
+        if (code !== 0) logError(`Worker ${i + 1} stopped with exit code ${code}`);
       });
     }
   })();
@@ -119,30 +110,21 @@ if (isMainThread) {
   }
 
   async function checkWallet(seedPhrase) {
-    while (true) {
-      try {
-        const seed = await bip39.mnemonicToSeed(seedPhrase);
-        const derivedSeed = derivePath(`m/44'/501'/0'/0'`, seed.toString('hex')).key;
-        const keypair = Keypair.fromSeed(derivedSeed);
-        const connection = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed');
-        const pubkey = keypair.publicKey.toBase58();
-        console.log(`[Worker ${workerId} - INFO] Testing seed: ${seedPhrase} for pubkey: ${pubkey}`);
-        const balance = await connection.getBalance(keypair.publicKey);
-        console.log(`[Worker ${workerId} - INFO] Retrieved balance for wallet ${pubkey}: ${balance}`);
-        if (balance > 0) {
-          console.log(`[Worker ${workerId} - SUCCESS] Found SOL in wallet: ${pubkey} with balance: ${balance}`);
-          parentPort.postMessage({ type: 'saveFoundWallet', pubkey, seedPhrase, balance });
-          console.log(`[SUCCESS] Wallet found with balance ${balance} SOL. Halting script.`);
-          process.exit(0);
-        } else {
-          console.log(`[Worker ${workerId} - INFO] No SOL found in wallet: ${pubkey}`);
-        }
-        parentPort.postMessage({ type: 'saveTriedSet', seedPhrase, pubkey, balance });
-        break;
-      } catch (error) {
-        console.error(`[Worker ${workerId} - ERROR] Error checking seed: ${seedPhrase} -> ${error.message}`);
-        await delay(5000 + Math.floor(Math.random() * 5000));
+    const seed = await bip39.mnemonicToSeed(seedPhrase);
+    const derivedSeed = derivePath(`m/44'/501'/0'/0'`, seed.toString('hex')).key;
+    const keypair = Keypair.fromSeed(derivedSeed);
+    const connection = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed');
+    const pubkey = keypair.publicKey.toBase58();
+    try {
+      const balance = await connection.getBalance(keypair.publicKey);
+      if (balance > 0) {
+        parentPort.postMessage({ type: 'saveFoundWallet', pubkey, seedPhrase, balance });
+        process.exit(0);
       }
+      parentPort.postMessage({ type: 'saveTriedSet', seedPhrase, pubkey, balance });
+    } catch (error) {
+      console.error(`[Worker ${workerId} - ERROR] Error checking seed: ${seedPhrase} -> ${error.message}`);
+      await delay(5000 + Math.floor(Math.random() * 5000));
     }
   }
 
