@@ -44,6 +44,37 @@ if (isMainThread) {
     }
   }
 
+  function loadProgress() {
+    if (fs.existsSync(TRIED_FILE) && fs.readFileSync(TRIED_FILE, 'utf8').trim() !== '') {
+      const data = JSON.parse(fs.readFileSync(TRIED_FILE, 'utf8'));
+      triedWallets = data.triedWallets || {};
+      triedSet = new Set(Object.keys(triedWallets));
+      walletCounter = data.walletCounter || 0;
+      logInfo(`Progress loaded: ${walletCounter} wallets already checked.`);
+    } else {
+      logInfo('No previous progress detected. Starting from scratch.');
+    }
+  }
+
+  function saveTriedSet(seedPhrase, pubkey, balance) {
+    walletCounter++;
+    triedWallets[walletCounter] = { seedPhrase, pubkey, balance, timestamp: new Date().toISOString() };
+    const dataToSave = { triedWallets, walletCounter, lastUpdated: new Date().toISOString() };
+    fs.writeFileSync(TRIED_FILE, JSON.stringify(dataToSave, null, 2));
+    logInfo(`Tried set saved for wallet #${walletCounter}: pubkey: ${pubkey}, balance: ${balance}`);
+  }
+
+  function saveFoundWallet(pubkey, seed, balance) {
+    const foundData = { pubkey, seed, balance };
+    let foundWallets = [];
+    if (fs.existsSync(FOUND_FILE) && fs.readFileSync(FOUND_FILE, 'utf8').trim() !== '') {
+      foundWallets = JSON.parse(fs.readFileSync(FOUND_FILE, 'utf8'));
+    }
+    foundWallets.push(foundData);
+    fs.writeFileSync(FOUND_FILE, JSON.stringify(foundWallets, null, 2));
+    console.log(chalk.bgYellow.black(`Wallet with balance found! Public Key: ${pubkey}, Balance: ${balance}. Script will now terminate.`));
+  }
+
   (async () => {
     checkFoundData();  // Check if there are any found wallets before starting any work.
     await Promise.all(RPC_URLS.map(url => checkInitialization(url)));
@@ -82,12 +113,16 @@ if (isMainThread) {
   }
 
   function getRandomSeedPhrase(seeds, length) {
-    const selectedIndices = new Set();
-    while (selectedIndices.size < length) {
-      const randomIndex = Math.floor(Math.random() * seeds.length);
-      selectedIndices.add(randomIndex);
-    }
-    return Array.from(selectedIndices).map(index => seeds[index]).join(' ');
+    let seedPhrase;
+    do {
+      const selectedIndices = new Set();
+      while (selectedIndices.size < length) {
+        const randomIndex = Math.floor(Math.random() * seeds.length);
+        selectedIndices.add(randomIndex);
+      }
+      seedPhrase = Array.from(selectedIndices).map(index => seeds[index]).join(' ');
+    } while (triedSet.has(seedPhrase));  // Ensure the generated phrase is not already tried
+    return seedPhrase;
   }
 
   async function checkWallet(seedPhrase) {
