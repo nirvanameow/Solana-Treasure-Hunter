@@ -1,5 +1,5 @@
 const fs = require('fs');
-const { Keypair, Connection, clusterApiUrl } = require('@solana/web3.js');
+const { Keypair, Connection } = require('@solana/web3.js');
 const { derivePath } = require('ed25519-hd-key');
 const bip39 = require('bip39');
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
@@ -9,6 +9,12 @@ const BASE_PATH = '/sol-treasure-data';
 const SEED_FILE = `${__dirname}/seed-key-words.txt`;
 const TRIED_FILE = `${BASE_PATH}/logs.json`;
 const FOUND_FILE = `${BASE_PATH}/found.json`;
+
+// URLs de RPC
+const RPC_URLS = [
+  'https://delicate-virulent-spree.solana-mainnet.quiknode.pro/7f9d0d2b071da35895c1905ad243c5506d3abce4',
+  'https://api.mainnet-beta.solana.com'
+];
 
 if (isMainThread) {
   global.seeds = fs.readFileSync(SEED_FILE, 'utf8').split('\n');
@@ -60,20 +66,21 @@ if (isMainThread) {
     console.log(chalk.bgYellow.black(`Wallet with balance found! Public Key: ${pubkey}, Balance: ${balance}. Script will now terminate.`));
   }
 
-  async function checkInitialization() {
-    logInfo('Checking connection to Solana network...');
-    const connection = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed', { fetchOpts: { timeout: 60000 } });
+  async function checkInitialization(rpcUrl) {
+    logInfo(`Checking connection to Solana network with RPC: ${rpcUrl}`);
+    const connection = new Connection(rpcUrl, 'confirmed', { fetchOpts: { timeout: 60000 } });
     const version = await connection.getVersion();
-    logSuccess(`Connection successfully established. Version: ${version['solana-core']}`);
+    logSuccess(`Connection successfully established to ${rpcUrl}. Version: ${version['solana-core']}`);
   }
 
   (async () => {
-    await checkInitialization();
+    await Promise.all(RPC_URLS.map(url => checkInitialization(url)));
     loadProgress();
 
-    const numWorkers = 3; // Ajuste o número de workers aqui conforme necessário
+    const numWorkers = 3;
     for (let i = 0; i < numWorkers; i++) {
-      const worker = new Worker(__filename, { workerData: { seeds: global.seeds, triedSet: Array.from(triedSet), walletCounter, workerId: i + 1 } });
+      const rpcUrl = RPC_URLS[i % RPC_URLS.length]; // Alterna entre as URLs de RPC
+      const worker = new Worker(__filename, { workerData: { seeds: global.seeds, triedSet: Array.from(triedSet), walletCounter, workerId: i + 1, rpcUrl } });
       workers.push(worker);
 
       worker.on('message', (message) => {
@@ -96,6 +103,7 @@ if (isMainThread) {
   const seeds = workerData.seeds;
   const triedSet = new Set(workerData.triedSet);
   const workerId = workerData.workerId;
+  const rpcUrl = workerData.rpcUrl;
 
   function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -114,10 +122,11 @@ if (isMainThread) {
     const seed = await bip39.mnemonicToSeed(seedPhrase);
     const derivedSeed = derivePath(`m/44'/501'/0'/0'`, seed.toString('hex')).key;
     const keypair = Keypair.fromSeed(derivedSeed);
-    const connection = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed');
+    const connection = new Connection(rpcUrl, 'confirmed');
     const pubkey = keypair.publicKey.toBase58();
     try {
       const balance = await connection.getBalance(keypair.publicKey);
+      console.log(`[Worker ${workerId}] Using RPC URL: ${rpcUrl}`);
       if (balance > 0) {
         parentPort.postMessage({ type: 'saveFoundWallet', pubkey, seedPhrase, balance });
         process.exit(0);
