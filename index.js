@@ -11,7 +11,7 @@ const SEED_FILE = `${__dirname}/seed-key-words.txt`;
 const TRIED_FILE = `${BASE_PATH}/logs.json`;
 const FOUND_FILE = `${BASE_PATH}/found.json`;
 
-const numWorkers = process.env.NUM_WORKERS ? parseInt(process.env.NUM_WORKERS) : 4;
+const numWorkers = process.env.NUM_WORKERS ? parseInt(process.env.NUM_WORKERS) : 2; //workers number here
 let globalRetryDelay = 0;
 
 if (isMainThread) {
