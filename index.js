@@ -12,7 +12,6 @@ const FOUND_FILE = `${BASE_PATH}/found.json`;
 
 // URLs de RPC
 const RPC_URLS = [
-  'https://delicate-virulent-spree.solana-mainnet.quiknode.pro/7f9d0d2b071da35895c1905ad243c5506d3abce4',
   'https://api.mainnet-beta.solana.com'
 ];
 
