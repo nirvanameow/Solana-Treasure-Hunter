@@ -1,5 +1,6 @@
 const fs = require('fs');
-const { Keypair, Connection } = require('@solana/web3.js');
+const readline = require('readline');
+const { Keypair, Connection, clusterApiUrl } = require('@solana/web3.js');
 const { derivePath } = require('ed25519-hd-key');
 const bip39 = require('bip39');
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
@@ -10,38 +11,26 @@ const SEED_FILE = `${__dirname}/seed-key-words.txt`;
 const TRIED_FILE = `${BASE_PATH}/logs.json`;
 const FOUND_FILE = `${BASE_PATH}/found.json`;
 
-// URLs de RPC
-const RPC_URLS = [
-  'https://api.mainnet-beta.solana.com'
-];
+const numWorkers = process.env.NUM_WORKERS ? parseInt(process.env.NUM_WORKERS) : 8;
+let globalRetryDelay = 0;
 
 if (isMainThread) {
-  global.seeds = fs.readFileSync(SEED_FILE, 'utf8').split('\n');
+  const seeds = fs.readFileSync(SEED_FILE, 'utf8').split('\n');
   let triedSet = new Set();
   let triedWallets = {};
   let walletCounter = 0;
   const workers = [];
 
-  function logInfo(message) {
-    console.log(chalk.blue(`[INFO - ${new Date().toISOString()}] ${message}`));
+  function logInfo(message, workerId = '') {
+    console.log(chalk.blue(`[INFO - ${new Date().toISOString()}] ${workerId && `[Worker ${workerId}] `}${message}`));
   }
 
-  function logError(message) {
-    console.error(chalk.red(`[ERROR - ${new Date().toISOString()}] ${message}`));
+  function logError(message, workerId = '') {
+    console.error(chalk.red(`[ERROR - ${new Date().toISOString()}] ${workerId && `[Worker ${workerId}] `}${message}`));
   }
 
-  function logSuccess(message) {
-    console.log(chalk.green(`[SUCCESS - ${new Date().toISOString()}] ${message}`));
-  }
-
-  function checkFoundData() {
-    if (fs.existsSync(FOUND_FILE)) {
-      const foundData = JSON.parse(fs.readFileSync(FOUND_FILE, 'utf8'));
-      if (foundData.length > 0) {
-        console.log(chalk.bgYellow.black(`[ALERT] Found wallets already exist. Found ${foundData.length} wallets with balances. Script will not proceed.`));
-        process.exit(0);
-      }
-    }
+  function logSuccess(message, workerId = '') {
+    console.log(chalk.green(`[SUCCESS - ${new Date().toISOString()}] ${workerId && `[Worker ${workerId}] `}${message}`));
   }
 
   function loadProgress() {
@@ -56,47 +45,57 @@ if (isMainThread) {
     }
   }
 
-  function saveTriedSet(seedPhrase, pubkey, balance) {
+  function saveTriedSet(seedPhrase, pubkey, balance, workerId) {
     walletCounter++;
     triedWallets[walletCounter] = { seedPhrase, pubkey, balance, timestamp: new Date().toISOString() };
     const dataToSave = { triedWallets, walletCounter, lastUpdated: new Date().toISOString() };
     fs.writeFileSync(TRIED_FILE, JSON.stringify(dataToSave, null, 2));
-    logInfo(`Tried set saved for wallet #${walletCounter}: pubkey: ${pubkey}, balance: ${balance}`);
+    logInfo(`Tried set saved for wallet #${walletCounter}: pubkey: ${pubkey}, balance: ${balance}`, workerId);
   }
 
-  function saveFoundWallet(pubkey, seed, balance) {
+  function saveFoundWallet(pubkey, seed, balance, workerId) {
     const foundData = { pubkey, seed, balance };
-    let foundWallets = [];
-    if (fs.existsSync(FOUND_FILE) && fs.readFileSync(FOUND_FILE, 'utf8').trim() !== '') {
-      foundWallets = JSON.parse(fs.readFileSync(FOUND_FILE, 'utf8'));
-    }
+    let foundWallets = fs.existsSync(FOUND_FILE) ? JSON.parse(fs.readFileSync(FOUND_FILE, 'utf8')) : [];
     foundWallets.push(foundData);
     fs.writeFileSync(FOUND_FILE, JSON.stringify(foundWallets, null, 2));
-    console.log(chalk.bgYellow.black(`Wallet with balance found! Public Key: ${pubkey}, Balance: ${balance}. Script will now terminate.`));
+    logSuccess(`Wallet with balance found! Public Key: ${pubkey}, Balance: ${balance}. Script will now terminate.`, workerId);
+  }
+
+  async function checkInitialization() {
+    const connection = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed', { fetchOpts: { timeout: 60000 } });
+    try {
+      const version = await connection.getVersion();
+      logSuccess(`Connection successfully established. Version: ${version['solana-core']}`);
+    } catch (error) {
+      logError(`Error establishing connection to Solana network: ${error.message}`);
+      process.exit(1);
+    }
   }
 
   (async () => {
-    checkFoundData();  // Check if there are any found wallets before starting any work.
-    await Promise.all(RPC_URLS.map(url => checkInitialization(url)));
+    await checkInitialization();
     loadProgress();
 
-    const numWorkers = 5;
     for (let i = 0; i < numWorkers; i++) {
-      const rpcUrl = RPC_URLS[i % RPC_URLS.length];
-      const worker = new Worker(__filename, { workerData: { seeds: global.seeds, triedSet: Array.from(triedSet), walletCounter, workerId: i + 1, rpcUrl } });
+      const worker = new Worker(__filename, { workerData: { seeds, triedSet: Array.from(triedSet), walletCounter, workerId: i + 1 } });
       workers.push(worker);
 
       worker.on('message', (message) => {
         if (message.type === 'saveTriedSet') {
-          saveTriedSet(message.seedPhrase, message.pubkey, message.balance);
+          saveTriedSet(message.seedPhrase, message.pubkey, message.balance, message.workerId);
         } else if (message.type === 'saveFoundWallet') {
-          saveFoundWallet(message.pubkey, message.seedPhrase, message.balance);
+          saveFoundWallet(message.pubkey, message.seedPhrase, message.balance, message.workerId);
           workers.forEach(w => w.terminate());
           process.exit(0);
+        } else if (message.type === 'logError') {
+          logError(message.error, message.workerId);
+        } else if (message.type === 'requestRetryDelay') {
+          globalRetryDelay = Math.max(globalRetryDelay, 5000 + Math.floor(Math.random() * 5000));
+          worker.postMessage({ type: 'setRetryDelay', delay: globalRetryDelay });
         }
       });
 
-      worker.on('error', logError);
+      worker.on('error', (error) => logError(error.message, i + 1));
       worker.on('exit', (code) => {
         if (code !== 0) logError(`Worker ${i + 1} stopped with exit code ${code}`);
       });
@@ -106,42 +105,46 @@ if (isMainThread) {
   const seeds = workerData.seeds;
   const triedSet = new Set(workerData.triedSet);
   const workerId = workerData.workerId;
-  const rpcUrl = workerData.rpcUrl;
+
+  let retryDelay = 2000;
+
+  parentPort.on('message', (message) => {
+    if (message.type === 'setRetryDelay') {
+      retryDelay = message.delay;
+    }
+  });
 
   function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   function getRandomSeedPhrase(seeds, length) {
-    let seedPhrase;
-    do {
-      const selectedIndices = new Set();
-      while (selectedIndices.size < length) {
-        const randomIndex = Math.floor(Math.random() * seeds.length);
-        selectedIndices.add(randomIndex);
-      }
-      seedPhrase = Array.from(selectedIndices).map(index => seeds[index]).join(' ');
-    } while (triedSet.has(seedPhrase));  // Ensure the generated phrase is not already tried
-    return seedPhrase;
+    const selectedIndices = new Set();
+    while (selectedIndices.size < length) {
+      const randomIndex = Math.floor(Math.random() * seeds.length);
+      selectedIndices.add(randomIndex);
+    }
+    return Array.from(selectedIndices).map(index => seeds[index]).join(' ');
   }
 
   async function checkWallet(seedPhrase) {
     const seed = await bip39.mnemonicToSeed(seedPhrase);
     const derivedSeed = derivePath(`m/44'/501'/0'/0'`, seed.toString('hex')).key;
     const keypair = Keypair.fromSeed(derivedSeed);
-    const connection = new Connection(rpcUrl, 'confirmed');
+    const connection = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed');
     const pubkey = keypair.publicKey.toBase58();
     try {
+      parentPort.postMessage({ type: 'logInfo', message: `Checking wallet with public key: ${pubkey}`, workerId });
       const balance = await connection.getBalance(keypair.publicKey);
-      console.log(`[Worker ${workerId}] Using RPC URL: ${rpcUrl}`);
       if (balance > 0) {
-        parentPort.postMessage({ type: 'saveFoundWallet', pubkey, seedPhrase, balance });
+        parentPort.postMessage({ type: 'saveFoundWallet', pubkey, seedPhrase, balance, workerId });
         process.exit(0);
       }
-      parentPort.postMessage({ type: 'saveTriedSet', seedPhrase, pubkey, balance });
+      parentPort.postMessage({ type: 'saveTriedSet', seedPhrase, pubkey, balance, workerId });
     } catch (error) {
-      console.error(`[Worker ${workerId} - ERROR] Error checking seed: ${seedPhrase} -> ${error.message}`);
-      await delay(5000 + Math.floor(Math.random() * 5000));
+      parentPort.postMessage({ type: 'logError', error: `Error checking seed: ${seedPhrase} -> ${error.message}`, workerId });
+      parentPort.postMessage({ type: 'requestRetryDelay' });
+      await delay(retryDelay);
     }
   }
 
@@ -151,7 +154,7 @@ if (isMainThread) {
       if (!triedSet.has(seedPhrase)) {
         await checkWallet(seedPhrase);
       }
-      await delay(2000);
+      await delay(retryDelay);
     }
   })();
 }
