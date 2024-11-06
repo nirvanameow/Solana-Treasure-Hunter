@@ -34,51 +34,24 @@ if (isMainThread) {
     console.log(chalk.green(`[SUCCESS - ${new Date().toISOString()}] ${message}`));
   }
 
-  function loadProgress() {
-    if (fs.existsSync(TRIED_FILE) && fs.readFileSync(TRIED_FILE, 'utf8').trim() !== '') {
-      const data = JSON.parse(fs.readFileSync(TRIED_FILE, 'utf8'));
-      triedWallets = data.triedWallets || {};
-      triedSet = new Set(Object.keys(triedWallets));
-      walletCounter = data.walletCounter || 0;
-      logInfo(`Progress loaded: ${walletCounter} wallets already checked.`);
-    } else {
-      logInfo('No previous progress detected. Starting from scratch.');
+  function checkFoundData() {
+    if (fs.existsSync(FOUND_FILE)) {
+      const foundData = JSON.parse(fs.readFileSync(FOUND_FILE, 'utf8'));
+      if (foundData.length > 0) {
+        console.log(chalk.bgYellow.black(`[ALERT] Found wallets already exist. Found ${foundData.length} wallets with balances. Script will not proceed.`));
+        process.exit(0);
+      }
     }
-  }
-
-  function saveTriedSet(seedPhrase, pubkey, balance) {
-    walletCounter++;
-    triedWallets[walletCounter] = { seedPhrase, pubkey, balance, timestamp: new Date().toISOString() };
-    const dataToSave = { triedWallets, walletCounter, lastUpdated: new Date().toISOString() };
-    fs.writeFileSync(TRIED_FILE, JSON.stringify(dataToSave, null, 2));
-    logInfo(`Tried set saved for wallet #${walletCounter}: pubkey: ${pubkey}, balance: ${balance}`);
-  }
-
-  function saveFoundWallet(pubkey, seed, balance) {
-    const foundData = { pubkey, seed, balance };
-    let foundWallets = [];
-    if (fs.existsSync(FOUND_FILE) && fs.readFileSync(FOUND_FILE, 'utf8').trim() !== '') {
-      foundWallets = JSON.parse(fs.readFileSync(FOUND_FILE, 'utf8'));
-    }
-    foundWallets.push(foundData);
-    fs.writeFileSync(FOUND_FILE, JSON.stringify(foundWallets, null, 2));
-    console.log(chalk.bgYellow.black(`Wallet with balance found! Public Key: ${pubkey}, Balance: ${balance}. Script will now terminate.`));
-  }
-
-  async function checkInitialization(rpcUrl) {
-    logInfo(`Checking connection to Solana network with RPC: ${rpcUrl}`);
-    const connection = new Connection(rpcUrl, 'confirmed', { fetchOpts: { timeout: 60000 } });
-    const version = await connection.getVersion();
-    logSuccess(`Connection successfully established to ${rpcUrl}. Version: ${version['solana-core']}`);
   }
 
   (async () => {
+    checkFoundData();  // Check if there are any found wallets before starting any work.
     await Promise.all(RPC_URLS.map(url => checkInitialization(url)));
     loadProgress();
 
     const numWorkers = 5;
     for (let i = 0; i < numWorkers; i++) {
-      const rpcUrl = RPC_URLS[i % RPC_URLS.length]; // Alterna entre as URLs de RPC
+      const rpcUrl = RPC_URLS[i % RPC_URLS.length];
       const worker = new Worker(__filename, { workerData: { seeds: global.seeds, triedSet: Array.from(triedSet), walletCounter, workerId: i + 1, rpcUrl } });
       workers.push(worker);
 
