@@ -77,7 +77,7 @@ if (isMainThread) {
     await Promise.all(RPC_URLS.map(url => checkInitialization(url)));
     loadProgress();
 
-    const numWorkers = 3;
+    const numWorkers = 20;
     for (let i = 0; i < numWorkers; i++) {
       const rpcUrl = RPC_URLS[i % RPC_URLS.length]; // Alterna entre as URLs de RPC
       const worker = new Worker(__filename, { workerData: { seeds: global.seeds, triedSet: Array.from(triedSet), walletCounter, workerId: i + 1, rpcUrl } });
